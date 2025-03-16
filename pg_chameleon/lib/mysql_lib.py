@@ -466,7 +466,7 @@ class mysql_source(object):
                     WHEN
                         data_type IN ('bit')
                     THEN
-                        concat('concat("B''", lpad(bin(cast(`',column_name,'` AS unsigned)), length(`',column_name,'`)*8, "0"), "''")')
+                        concat('concat("B''", lpad(bin(cast(`',column_name,'` AS unsigned)), 64, "0"), "''") ')
                     WHEN
                         data_type IN ('datetime','timestamp','date')
                     THEN
@@ -488,7 +488,7 @@ class mysql_source(object):
                     WHEN
                         data_type IN ('bit')
                     THEN
-                        concat('concat("B''", lpad(bin(cast(`',column_name,'` AS unsigned)), length(`',column_name,'`)*8, "0"), "''") AS','`',column_name,'`')
+                        concat('concat("B''", lpad(bin(cast(`',column_name,'` AS unsigned)), 64, "0"), "''") AS `',column_name,'`')
                     WHEN
                         data_type IN ('datetime','timestamp','date')
                     THEN
@@ -513,9 +513,18 @@ class mysql_source(object):
                 ordinal_position
             ;
         """
+        self.logger.debug("Executing query %s" % sql_select)
         self.cursor_buffered.execute(sql_select, (schema, table))
         select_data = self.cursor_buffered.fetchall()
-        select_csv = ["COALESCE(REPLACE(%s, '\"', '\"\"'),'NULL') " % statement["select_csv"] for statement in select_data]
+        select_csv = []
+        for statement in select_data:
+            if "B'" in statement["select_csv"]:
+                # For bit fields, don't add extra quotes or escaping
+                select_csv.append("COALESCE(%s,'NULL') " % statement["select_csv"])
+            else:
+                # For other fields, use standard escaping
+                select_csv.append("COALESCE(REPLACE(%s, '\"', '\"\"'),'NULL') " % statement["select_csv"])
+        
         select_stat = [statement["select_csv"] for statement in select_data]
         column_list = ['"%s"' % statement["column_name"] for statement in select_data]
         select_columns["select_csv"] = "REPLACE(CONCAT('\"',CONCAT_WS('\",\"',%s),'\"'),'\"NULL\"','NULL')" % ','.join(select_csv)
