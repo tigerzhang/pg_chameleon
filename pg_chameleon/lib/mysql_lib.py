@@ -466,7 +466,7 @@ class mysql_source(object):
                     WHEN
                         data_type IN ('bit')
                     THEN
-                        concat('cast(`',column_name,'` AS unsigned)')
+                        concat('concat("B''", lpad(bin(cast(`',column_name,'` AS unsigned)), length(`',column_name,'`)*8, "0"), "''")')
                     WHEN
                         data_type IN ('datetime','timestamp','date')
                     THEN
@@ -488,7 +488,7 @@ class mysql_source(object):
                     WHEN
                         data_type IN ('bit')
                     THEN
-                        concat('cast(`',column_name,'` AS unsigned) AS','`',column_name,'`')
+                        concat('concat("B''", lpad(bin(cast(`',column_name,'` AS unsigned)), length(`',column_name,'`)*8, "0"), "''") AS','`',column_name,'`')
                     WHEN
                         data_type IN ('datetime','timestamp','date')
                     THEN
@@ -1060,6 +1060,26 @@ class mysql_source(object):
         decoded_data=binascii.hexlify(raw_data)
         return decoded_data.decode()[8:]
 
+    def __convert_bit_to_pg_bit(self, value, length=64):
+        """
+            The method converts a MySQL bit value (returned as integer) to PostgreSQL bit format
+            
+            :param value: The integer value from MySQL bit field
+            :param length: The bit length (default 64)
+            :return: String representation of the bit value in PostgreSQL format
+            :rtype: str
+        """
+        if value is None:
+            return None
+            
+        # Convert integer to binary string and remove '0b' prefix
+        binary_str = bin(int(value))[2:]
+        
+        # Pad with zeros to match the specified length
+        binary_str = binary_str.zfill(length)
+        
+        return binary_str
+
     def get_table_type_map(self):
         """
             The method builds a dictionary with a key per each schema replicated.
@@ -1451,6 +1471,13 @@ class mysql_source(object):
                                     event_after[column_name] = self.__decode_dic_keys(event_after[column_name])
                                 elif column_type in self.spatial_datatypes and event_after[column_name]:
                                     event_after[column_name] = self.__get_text_spatial(event_after[column_name])
+                                elif column_type.startswith('bit') and event_after[column_name] is not None:
+                                    # Extract bit length if specified (e.g., bit(64) -> 64)
+                                    bit_length = 64  # Default length
+                                    match = re.search(r'bit\((\d+)\)', column_type)
+                                    if match:
+                                        bit_length = int(match.group(1))
+                                    event_after[column_name] = self.__convert_bit_to_pg_bit(event_after[column_name], bit_length)
 
 
                             for column_name in event_before:
@@ -1467,6 +1494,13 @@ class mysql_source(object):
                                     event_before[column_name] = self.__decode_dic_keys(event_after[column_name])
                                 elif column_type in self.spatial_datatypes and event_after[column_name]:
                                     event_before[column_name] = self.__get_text_spatial(event_before[column_name])
+                                elif column_type.startswith('bit') and event_before[column_name] is not None:
+                                    # Extract bit length if specified (e.g., bit(64) -> 64)
+                                    bit_length = 64  # Default length
+                                    match = re.search(r'bit\((\d+)\)', column_type)
+                                    if match:
+                                        bit_length = int(match.group(1))
+                                    event_before[column_name] = self.__convert_bit_to_pg_bit(event_before[column_name], bit_length)
                             event_insert={"global_data":global_data,"event_after":event_after,  "event_before":event_before}
                             size_insert += len(str(event_insert))
                             group_insert.append(event_insert)

@@ -578,7 +578,7 @@ class pg_engine(object):
             'double':'double precision',
             'double precision':'double precision',
             'float':'double precision',
-            'bit':'integer',
+            'bit':'bit',
             'year':'integer',
             'enum':'enum',
             'set':'text',
@@ -1498,7 +1498,13 @@ class pg_engine(object):
 
                 if column_type=="character varying" or column_type=="character" or column_type=='numeric' or column_type=='bit' or column_type=='float':
                         column_type=column_type+"("+str(alter_dic["dimension"])+")"
-                sql_type = """ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DATA TYPE %s  USING "%s"::%s ;;""" % (schema, table_name, old_column, column_type, old_column, column_type)
+                
+                # Special handling for bit fields to ensure proper conversion
+                if column_type.startswith('bit'):
+                    sql_type = """ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DATA TYPE %s USING lpad(replace(replace(CAST("%s" AS text), 'B', ''), '''', ''), %s, '0')::%s ;;""" % (schema, table_name, old_column, column_type, old_column, alter_dic["dimension"], column_type)
+                else:
+                    sql_type = """ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DATA TYPE %s USING "%s"::%s ;;""" % (schema, table_name, old_column, column_type, old_column, column_type)
+                
                 if old_column != new_column:
                     sql_rename="""ALTER TABLE "%s"."%s" RENAME COLUMN "%s" TO "%s" ;""" % (schema, table_name, old_column, new_column)
 
@@ -1524,7 +1530,13 @@ class pg_engine(object):
                 if column_type=="character varying" or column_type=="character" or column_type=='numeric' or column_type=='bit' or column_type=='float':
                         column_type=column_type+"("+str(alter_dic["dimension"])+")"
                 query = ' '.join(ddl_pre_alter)
-                query +=  """ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DATA TYPE %s USING "%s"::%s ;""" % (schema, table_name, column_name, column_type, column_name, column_type)
+                
+                # Special handling for bit fields to ensure proper conversion
+                if column_type.startswith('bit'):
+                    query += """ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DATA TYPE %s USING lpad(replace(replace(CAST("%s" AS text), 'B', ''), '''', ''), %s, '0')::%s ;""" % (schema, table_name, column_name, column_type, column_name, alter_dic["dimension"], column_type)
+                else:
+                    query += """ALTER TABLE "%s"."%s" ALTER COLUMN "%s" SET DATA TYPE %s USING "%s"::%s ;""" % (schema, table_name, column_name, column_type, column_name, column_type)
+                
                 query += ' '.join(ddl_post_alter)
                 return query
         query = ' '.join(ddl_pre_alter)
