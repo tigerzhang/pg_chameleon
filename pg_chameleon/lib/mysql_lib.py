@@ -851,7 +851,7 @@ class mysql_source(object):
                         self.pg_engine.create_idx_cons(destination_schema,table)
                 except:
                     self.logger.info("Could not copy the table %s. Excluding it from the replica." %(table) )
-                    raise
+                    continue
 
     def set_copy_max_memory(self):
         """
