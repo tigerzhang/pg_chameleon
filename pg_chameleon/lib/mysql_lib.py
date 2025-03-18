@@ -466,7 +466,7 @@ class mysql_source(object):
                     WHEN
                         data_type IN ('bit')
                     THEN
-                        concat('concat("B''", lpad(bin(cast(`',column_name,'` AS unsigned)), 64, "0"), "''") ')
+                        concat('lpad(bin(cast(`',column_name,'` AS unsigned)), 64, "0") ')
                     WHEN
                         data_type IN ('datetime','timestamp','date')
                     THEN
@@ -518,7 +518,7 @@ class mysql_source(object):
         select_data = self.cursor_buffered.fetchall()
         select_csv = []
         for statement in select_data:
-            if "B'" in statement["select_csv"]:
+            if statement["select_csv"].strip().startswith("lpad(bin("):
                 # For bit fields, don't add extra quotes or escaping
                 select_csv.append("COALESCE(%s,'NULL') " % statement["select_csv"])
             else:
@@ -1071,23 +1071,37 @@ class mysql_source(object):
 
     def __convert_bit_to_pg_bit(self, value, length=64):
         """
-            The method converts a MySQL bit value (returned as integer) to PostgreSQL bit format
+            将 MySQL 位值转换为纯二进制字符串
             
-            :param value: The integer value from MySQL bit field
-            :param length: The bit length (default 64)
-            :return: String representation of the bit value in PostgreSQL format
-            :rtype: str
+            :param value: MySQL 位字段值
+            :param length: 位长度
+            :return: 纯二进制字符串（只包含 0 和 1）
         """
         if value is None:
             return None
+        
+        try:
+            # 处理不同类型的输入
+            if isinstance(value, str):
+                # 移除所有非二进制字符（包括 'B' 和引号）
+                clean_value = ''.join(c for c in value if c in '01')
+                if clean_value:
+                    binary_str = clean_value.zfill(length)
+                else:
+                    binary_str = "0" * length
+            else:
+                # 处理整数值
+                binary_str = bin(int(value))[2:].zfill(length)
             
-        # Convert integer to binary string and remove '0b' prefix
-        binary_str = bin(int(value))[2:]
-        
-        # Pad with zeros to match the specified length
-        binary_str = binary_str.zfill(length)
-        
-        return binary_str
+            # 确保长度正确
+            if len(binary_str) > length:
+                binary_str = binary_str[-length:]  # 截取最低有效位
+            
+            return binary_str
+        except Exception as e:
+            self.logger.error("Error converting bit value '%s': %s", value, str(e))
+            # 返回默认值
+            return "0" * length
 
     def get_table_type_map(self):
         """

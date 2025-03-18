@@ -24,10 +24,10 @@ class pg_encoder(json.JSONEncoder):
             isinstance(obj, bytes):
 
             return str(obj)
-        # Handle bit values by formatting them as PostgreSQL bit literals
+        # For bit strings in JSON, return the pure binary string without B'...' format
+        # This is important for COPY operations which expect pure binary data
         elif isinstance(obj, str) and len(obj) > 0 and all(c in '01' for c in obj):
-            # If it's a binary string (contains only 0s and 1s), format as a bit literal
-            return "B'" + obj + "'"
+            return obj
         return json.JSONEncoder.default(self, obj)
 
 class pgsql_source(object):
@@ -2872,6 +2872,9 @@ class pg_engine(object):
             the string like object csv_file.
 
             psycopg2's copy expert is used to store the event data in PostgreSQL.
+            
+            For bit fields, we ensure they are stored as pure binary strings (only 0s and 1s)
+            without the B'...' format, as PostgreSQL COPY operations expect bit fields in this format.
 
             Should any error occur the procedure fallsback to insert_batch.
 
@@ -2907,31 +2910,53 @@ class pg_engine(object):
                 self.pgsql_cur.execute(sql_check_bit, (schema, table))
                 bit_columns = {row[0]: row[1] or 64 for row in self.pgsql_cur.fetchall()}
                 
-                # Format bit values in event_after
+                # For COPY operations, we need pure binary strings without B'...' format
                 for col_name, bit_length in bit_columns.items():
                     if col_name in event_after and event_after[col_name] is not None:
                         if isinstance(event_after[col_name], int):
                             # Convert integer to binary string
                             binary_str = bin(int(event_after[col_name]))[2:].zfill(bit_length)
-                            # Format as PostgreSQL bit literal
-                            event_after[col_name] = "B'" + binary_str + "'"
-                        elif isinstance(event_after[col_name], str) and not event_after[col_name].startswith("B'"):
-                            # If it's already a binary string but not formatted as a bit literal
-                            if all(c in '01' for c in event_after[col_name]):
-                                event_after[col_name] = "B'" + event_after[col_name] + "'"
+                            event_after[col_name] = binary_str
+                        elif isinstance(event_after[col_name], str):
+                            # If it has B'...' format, remove it
+                            if event_after[col_name].startswith("B'") and event_after[col_name].endswith("'"):
+                                event_after[col_name] = event_after[col_name][2:-1]
+                            # If it's already a pure binary string, keep it
+                            elif all(c in '01' for c in event_after[col_name]):
+                                pass
+                            else:
+                                # Try to convert to binary
+                                try:
+                                    clean_value = ''.join(c for c in event_after[col_name] if c.isdigit())
+                                    binary_str = bin(int(clean_value))[2:].zfill(bit_length)
+                                    event_after[col_name] = binary_str
+                                except ValueError:
+                                    # If conversion fails, use default value
+                                    event_after[col_name] = '0' * bit_length
                 
-                # Format bit values in event_before
+                # Same for event_before
                 for col_name, bit_length in bit_columns.items():
                     if col_name in event_before and event_before[col_name] is not None:
                         if isinstance(event_before[col_name], int):
                             # Convert integer to binary string
                             binary_str = bin(int(event_before[col_name]))[2:].zfill(bit_length)
-                            # Format as PostgreSQL bit literal
-                            event_before[col_name] = "B'" + binary_str + "'"
-                        elif isinstance(event_before[col_name], str) and not event_before[col_name].startswith("B'"):
-                            # If it's already a binary string but not formatted as a bit literal
-                            if all(c in '01' for c in event_before[col_name]):
-                                event_before[col_name] = "B'" + event_before[col_name] + "'"
+                            event_before[col_name] = binary_str
+                        elif isinstance(event_before[col_name], str):
+                            # If it has B'...' format, remove it
+                            if event_before[col_name].startswith("B'") and event_before[col_name].endswith("'"):
+                                event_before[col_name] = event_before[col_name][2:-1]
+                            # If it's already a pure binary string, keep it
+                            elif all(c in '01' for c in event_before[col_name]):
+                                pass
+                            else:
+                                # Try to convert to binary
+                                try:
+                                    clean_value = ''.join(c for c in event_before[col_name] if c.isdigit())
+                                    binary_str = bin(int(clean_value))[2:].zfill(bit_length)
+                                    event_before[col_name] = binary_str
+                                except ValueError:
+                                    # If conversion fails, use default value
+                                    event_before[col_name] = '0' * bit_length
             except:
                 # If there's an error checking bit columns, continue without formatting
                 pass
@@ -3020,31 +3045,51 @@ class pg_engine(object):
                 self.pgsql_cur.execute(sql_check_bit, (schema, table))
                 bit_columns = {row[0]: row[1] or 64 for row in self.pgsql_cur.fetchall()}
                 
-                # Format bit values in event_after
+                # For SQL INSERT operations, we need to add B'...' format for bit fields
                 for col_name, bit_length in bit_columns.items():
                     if col_name in event_after and event_after[col_name] is not None:
-                        if isinstance(event_after[col_name], int):
-                            # Convert integer to binary string
-                            binary_str = bin(int(event_after[col_name]))[2:].zfill(bit_length)
-                            # Format as PostgreSQL bit literal
-                            event_after[col_name] = "B'" + binary_str + "'"
-                        elif isinstance(event_after[col_name], str) and not event_after[col_name].startswith("B'"):
-                            # If it's already a binary string but not formatted as a bit literal
-                            if all(c in '01' for c in event_after[col_name]):
-                                event_after[col_name] = "B'" + event_after[col_name] + "'"
+                        # If it's already a pure binary string, add the B'...' format
+                        if isinstance(event_after[col_name], str) and all(c in '01' for c in event_after[col_name]):
+                            event_after[col_name] = "B'" + event_after[col_name] + "'"
+                        # If it already has B'...' format, keep it
+                        elif isinstance(event_after[col_name], str) and event_after[col_name].startswith("B'") and event_after[col_name].endswith("'"):
+                            pass
+                        # Convert int or other formats to the proper format
+                        else:
+                            try:
+                                if isinstance(event_after[col_name], int):
+                                    binary_str = bin(event_after[col_name])[2:].zfill(bit_length)
+                                else:
+                                    # Try to clean the value to get only digits
+                                    clean_value = ''.join(c for c in str(event_after[col_name]) if c.isdigit())
+                                    binary_str = bin(int(clean_value))[2:].zfill(bit_length)
+                                event_after[col_name] = "B'" + binary_str + "'"
+                            except ValueError:
+                                # In case of conversion error, use default
+                                event_after[col_name] = "B'" + ('0' * bit_length) + "'"
                 
-                # Format bit values in event_before
+                # Same for event_before
                 for col_name, bit_length in bit_columns.items():
                     if col_name in event_before and event_before[col_name] is not None:
-                        if isinstance(event_before[col_name], int):
-                            # Convert integer to binary string
-                            binary_str = bin(int(event_before[col_name]))[2:].zfill(bit_length)
-                            # Format as PostgreSQL bit literal
-                            event_before[col_name] = "B'" + binary_str + "'"
-                        elif isinstance(event_before[col_name], str) and not event_before[col_name].startswith("B'"):
-                            # If it's already a binary string but not formatted as a bit literal
-                            if all(c in '01' for c in event_before[col_name]):
-                                event_before[col_name] = "B'" + event_before[col_name] + "'"
+                        # If it's already a pure binary string, add the B'...' format
+                        if isinstance(event_before[col_name], str) and all(c in '01' for c in event_before[col_name]):
+                            event_before[col_name] = "B'" + event_before[col_name] + "'"
+                        # If it already has B'...' format, keep it
+                        elif isinstance(event_before[col_name], str) and event_before[col_name].startswith("B'") and event_before[col_name].endswith("'"):
+                            pass
+                        # Convert int or other formats to the proper format
+                        else:
+                            try:
+                                if isinstance(event_before[col_name], int):
+                                    binary_str = bin(event_before[col_name])[2:].zfill(bit_length)
+                                else:
+                                    # Try to clean the value to get only digits
+                                    clean_value = ''.join(c for c in str(event_before[col_name]) if c.isdigit())
+                                    binary_str = bin(int(clean_value))[2:].zfill(bit_length)
+                                event_before[col_name] = "B'" + binary_str + "'"
+                            except ValueError:
+                                # In case of conversion error, use default
+                                event_before[col_name] = "B'" + ('0' * bit_length) + "'"
             except:
                 # If there's an error checking bit columns, continue without formatting
                 pass
@@ -3077,6 +3122,7 @@ class pg_engine(object):
                 ;
             """).format(sql.Identifier(log_table))
             try:
+                self.logger.debug("sql_insert: %s" % sql_insert)
                 self.pgsql_cur.execute(sql_insert,(
                         global_data["batch_id"],
                         global_data["table"],
@@ -3103,6 +3149,7 @@ class pg_engine(object):
                     #event_after = {key: str(value).replace("\x00", "") for key, value in event_after.items() if value}
                     #event_before = {key: str(value).replace("\x00", "") for key, value in event_before.items() if value}
                     try:
+                        self.logger.debug("sql_insert: %s", sql_insert)
                         self.pgsql_cur.execute(sql_insert,(
                                 global_data["batch_id"],
                                 global_data["table"],
@@ -4078,59 +4125,118 @@ class pg_engine(object):
             self.pgsql_cur.copy_expert(sql_copy, csv_file)
         except psycopg2.Error as e:
             self.logger.error("SQLCODE: %s SQLERROR: %s" % (e.pgcode, e.pgerror))
-            # If the error is related to bit fields, we'll try to read the CSV and insert row by row
+            # If the error is related to bit fields, we'll try to preprocess the CSV data
             if "bit" in str(e) or "binary" in str(e):
-                self.logger.info("Error with bit fields, trying row-by-row insert")
+                self.logger.info("Error with bit fields, trying to fix bit field formatting")
                 csv_file.seek(0)
                 csv_data = csv_file.read()
-                rows = csv_data.strip().split('\n')
-                columns = column_list.split(',')
                 
                 # Check if there are any bit fields in the table
                 sql_check_bit = """
                     SELECT 
-                        column_name, ordinal_position - 1 as position
+                        column_name, character_maximum_length 
                     FROM 
                         information_schema.columns 
                     WHERE 
                         table_schema = %s 
                         AND table_name = %s 
                         AND data_type LIKE 'bit%%'
-                    ORDER BY ordinal_position
                 """
                 
                 self.pgsql_cur.execute(sql_check_bit, (schema, table))
-                bit_positions = {row[1]: row[0] for row in self.pgsql_cur.fetchall()}
+                bit_columns = {row[0].strip('"'): row[1] or 64 for row in self.pgsql_cur.fetchall()}
                 
+                if bit_columns:
+                    # Find the column positions for bit fields
+                    columns = column_list.split(',')
+                    bit_column_indexes = {}
+                    
+                    for col_name in bit_columns:
+                        col_quoted = '"%s"' % col_name
+                        if col_quoted in columns:
+                            bit_column_indexes[columns.index(col_quoted)] = bit_columns[col_name]
+                    
+                    # Try to fix the CSV data
+                    if bit_column_indexes:
+                        try:
+                            # Process the CSV rows
+                            rows = csv_data.strip().split('\n')
+                            fixed_rows = []
+                            
+                            for row in rows:
+                                values = self._parse_csv_row(row)
+                                
+                                # Fix bit values - remove B'...' format
+                                for idx, length in bit_column_indexes.items():
+                                    if idx < len(values) and values[idx] is not None and values[idx] != 'NULL':
+                                        bit_value = values[idx].strip('"')
+                                        if bit_value.startswith("B'") and bit_value.endswith("'"):
+                                            # Remove B'...' format
+                                            values[idx] = '"' + bit_value[2:-1] + '"'
+                                
+                                # Reconstruct CSV row
+                                fixed_row = ','.join(str(v) if v is not None else 'NULL' for v in values)
+                                fixed_rows.append(fixed_row)
+                            
+                            # Create new CSV file
+                            new_csv_file = io.StringIO()
+                            new_csv_file.write('\n'.join(fixed_rows))
+                            new_csv_file.seek(0)
+                            
+                            # Try COPY again with fixed data
+                            try:
+                                self.pgsql_cur.copy_expert(sql_copy, new_csv_file)
+                                return  # Success, exit the method
+                            except psycopg2.Error as e2:
+                                self.logger.error("Still failed after fixing bit fields: %s" % str(e2))
+                                # Fall back to row-by-row insert
+                        except Exception as e3:
+                            self.logger.error("Error fixing bit fields: %s" % str(e3))
+                
+                # If we get here, the fix didn't work or wasn't applied, fall back to row-by-row insert
+                self.logger.info("Error with bit fields, trying row-by-row insert")
+                csv_file.seek(0)
+                csv_data = csv_file.read()
+                rows = csv_data.strip().split('\n')
+                columns = column_list.split(',')
+                
+                # Process each row
                 for row in rows:
+                    # Parse the CSV row into values
+                    values = self._parse_csv_row(row)
+                    
+                    # Format bit values with B'...' for SQL INSERT
+                    for idx, length in bit_column_indexes.items():
+                        if idx < len(values) and values[idx] not in ('NULL', None) and values[idx] != '':
+                            # Remove quotes if present
+                            bit_value = values[idx].strip('"')
+                            # Remove B'...' format if present
+                            if bit_value.startswith("B'") and bit_value.endswith("'"):
+                                bit_value = bit_value[2:-1]
+                            # Add proper B'...' format for SQL INSERT
+                            values[idx] = "B'" + bit_value + "'"
+                    
+                    # Build and execute INSERT statement
+                    placeholders = ["%s"] * len(values)
+                    sql_insert = """
+                        INSERT INTO "{0}"."{1}" ({2})
+                        VALUES ({3})
+                    """.format(
+                        schema, 
+                        table, 
+                        column_list, 
+                        ",".join(placeholders)
+                    )
+                    
                     try:
-                        # Parse CSV row
-                        values = self._parse_csv_row(row)
-                        
-                        # Format bit values
-                        for pos, col_name in bit_positions.items():
-                            if pos < len(values) and values[pos] is not None and values[pos] != 'NULL':
-                                if values[pos].startswith('"B\'') and values[pos].endswith('\'"'):
-                                    # Already formatted correctly, but with extra quotes
-                                    values[pos] = values[pos][1:-1]  # Remove outer quotes
-                                elif values[pos].startswith('B\'') and values[pos].endswith('\''):
-                                    # Already formatted correctly
-                                    continue
-                                elif all(c in '01' for c in values[pos].strip('"')):
-                                    # Binary string, format as PostgreSQL bit literal
-                                    values[pos] = "B'" + values[pos].strip('"') + "'"
-                        
-                        # Build and execute INSERT statement
-                        placeholders = ','.join(['%s' for _ in values])
-                        sql_insert = 'INSERT INTO "{0}"."{1}" ({2}) VALUES ({3});'.format(
-                            schema, table, column_list, placeholders
-                        )
                         self.pgsql_cur.execute(sql_insert, values)
-                    except Exception as row_error:
-                        self.logger.error("Error inserting row: %s" % str(row_error))
-                        self.logger.error("Row data: %s" % row)
+                    except psycopg2.Error as e:
+                        self.logger.error("Error inserting row: %s" % str(e))
+                        continue
+                
+                self.logger.info("Completed row-by-row insert for table %s.%s" % (schema, table))
             else:
-                # Re-raise the original error if it's not related to bit fields
+                # For other errors, just raise the exception
                 raise
     
     def _parse_csv_row(self, row):
@@ -4163,7 +4269,7 @@ class pg_engine(object):
             else:
                 current_value += char
         
-        # Add the last value
+        # Don't forget the last value
         if current_value == 'NULL':
             values.append(None)
         else:
@@ -4173,80 +4279,63 @@ class pg_engine(object):
 
     def insert_data(self, schema, table, insert_data , column_list):
         """
-            The method is a fallback procedure for when the copy method fails.
-            The procedure performs a row by row insert, very slow but capable to skip the rows with problematic data (e.g. encoding issues).
+            The method loops over the insert_data performing a single insert for each record.
+            If the table's schema doesn't exists in the _pg_schema dictionary a SELECT statement is executed to determine the
+            tables's DDL.
+            The method assumes there is at least an implicit database connection active.
 
-            :param schema: the schema name where table belongs
-            :param table: the table name where the data should be inserted
-            :param insert_data: a list of records extracted from the database using the unbuffered cursor
-            :param column_list: the list of column names quoted  for the inserts
+            :param schema: The schema where table is stored
+            :param table: The table name where records are inserted
+            :param insert_data: The data to insert
+            :param column_list: A list with the column names and the column position
+
         """
-        sample_row = insert_data[0]
-        column_marker=','.join(['%s' for column in sample_row])
+        if len(insert_data) == 0:
+            return
+        column_copy=[]
+        for column in column_list.split(','):
+            column_copy.append(column.strip('"'))
+        plain_list=[]
+        for column in column_list.split(','):
+            plain_list.append(column.strip('"'))
 
         # Check if there are any bit fields in the table
         sql_check_bit = """
             SELECT 
-                column_name, ordinal_position - 1 as position
+                column_name, character_maximum_length 
             FROM 
                 information_schema.columns 
             WHERE 
                 table_schema = %s 
                 AND table_name = %s 
                 AND data_type LIKE 'bit%%'
-            ORDER BY ordinal_position
         """
+        self.pgsql_cur.execute(sql_check_bit, (schema, table))
+        bit_columns = {row[0]: row[1] or 64 for row in self.pgsql_cur.fetchall()}
         
-        try:
-            self.pgsql_cur.execute(sql_check_bit, (schema, table))
-            bit_positions = {row[1]: row[0] for row in self.pgsql_cur.fetchall()}
-        except:
-            bit_positions = {}
-
-        sql_head='INSERT INTO "%s"."%s"(%s) VALUES (%s);' % (schema, table, column_list, column_marker)
         for data_row in insert_data:
-            try:
-                # Convert tuple to list if we need to modify bit fields
-                if bit_positions and isinstance(data_row, tuple):
-                    data_row = list(data_row)
-                    
-                    # Format bit values
-                    for pos, col_name in bit_positions.items():
-                        if pos < len(data_row) and data_row[pos] is not None:
-                            if isinstance(data_row[pos], str) and data_row[pos].startswith("B'") and data_row[pos].endswith("'"):
-                                # convert to binary string
-                                # self.logger.info("Converting bit field to binary string: %s" % data_row[pos])
-                                data_row[pos] = data_row[pos][2:-1]
-                                # self.logger.info("Converted bit field to binary string: %s" % data_row[pos])
-                            elif isinstance(data_row[pos], str) and all(c in '01' for c in data_row[pos]):
-                                # Binary string, format as PostgreSQL bit literal
-                                data_row[pos] = "B'" + data_row[pos] + "'"
-                            elif isinstance(data_row[pos], int):
-                                # Integer value, convert to binary string
-                                binary_str = bin(data_row[pos])[2:]  # Remove '0b' prefix
-                                data_row[pos] = "B'" + binary_str + "'"
-                
-                self.pgsql_cur.execute(sql_head, data_row)
-            except psycopg2.Error as e:
-                self.logger.error("SQLCODE: %s SQLERROR: %s" % (e.pgcode, e.pgerror))
-                self.logger.error(self.pgsql_cur.mogrify(sql_head, data_row))
-            except ValueError:
-                self.logger.warning("character mismatch when inserting the data, trying to cleanup the row data")
-                self.logger.error(data_row)
-                cleanup_data_row = []
-                for item in data_row:
-                    if item:
-                        cleanup_data_row.append(str(item).replace("\x00", ""))
+            column_values=[]
+            sql_head="INSERT INTO "+schema+"."+table+" ("+column_list+") VALUES ("
+            sql_tail=");"
+            for column in column_copy:
+                if column in data_row:
+                    # For bit fields, add proper B'...' format
+                    if column in bit_columns and data_row[column] is not None:
+                        binary_str = data_row[column]
+                        # If it's a pure binary string, add the B'...' format
+                        if isinstance(binary_str, str) and all(c in '01' for c in binary_str):
+                            if not binary_str.startswith("B'"):
+                                column_values.append("B'" + binary_str + "'")
+                            else:
+                                column_values.append(binary_str)
+                        else:
+                            column_values.append(data_row[column])
                     else:
-                        cleanup_data_row.append(item)
-                data_row = cleanup_data_row
-                try:
-                    self.pgsql_cur.execute(sql_head, data_row)
-                except:
-                    self.logger.error("error when inserting the row, skipping the row")
-            except Exception as e:
-                self.logger.error("unexpected error when processing the row: %s" % str(e))
-                self.logger.error(" - > Table: %s.%s" % (schema, table))
+                        column_values.append(data_row[column])
+                else:
+                    column_values.append('NULL')
+            sql_value=self.pgsql_cur.mogrify(sql_head+"%s"+sql_tail , (column_values, )).decode('utf8')
+            self.pgsql_cur.execute(sql_value)
 
     def get_existing_pkey(self,schema,table):
         """

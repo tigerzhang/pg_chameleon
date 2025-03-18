@@ -153,3 +153,9 @@ Inside the directory there are three subdirectories.
 
 You should  use config-example.yaml as template for the other configuration files.
 Check the `configuration file reference <http://www.pgchameleon.org/documents/configuration_file.html>`_   for an overview.
+
+
+Known issues
+*****************
+
+* Bit fields are hard coded to 64 bits. i.e. Mysql bit(32) should be overridden to bit(64) in the configuration file. Mysql bit(64) should be overridden to bit(64).
