@@ -1223,7 +1223,11 @@ class pg_engine(object):
             exit_on_error = True if self.source_config["on_error_replay"]=='exit' else False
             while continue_loop:
                 sql_replay = """SELECT * FROM sch_chameleon.fn_replay_mysql(%s,%s,%s);""";
-                self.pgsql_cur.execute(sql_replay, (replay_max_rows, self.i_id_source, exit_on_error))
+                try:
+                    self.pgsql_cur.execute(sql_replay, (replay_max_rows, self.i_id_source, exit_on_error))
+                except Exception as e:
+                    self.logger.error("Error when replaying the rows: %s" % str(e))
+                    continue
                 replay_status = self.pgsql_cur.fetchone()
                 if replay_status[0]:
                     self.logger.info("Replayed at most %s rows for source %s" % (replay_max_rows, self.source) )
@@ -1947,7 +1951,14 @@ class pg_engine(object):
                 table_schema = self.schema_loading[schema]["destination"]
                 where_cond = "format('%%I.%%I','%s','%s')" % (table_schema, table_name)
                 list_conditions.append(where_cond)
+        
+        # # Skip if there are no tables to clean up
+        if not list_conditions:
+            self.logger.debug("No tables to clean up events for")
+            return
+            
         sql_cleanup = "DELETE FROM sch_chameleon.{} WHERE format('%%I.%%I',v_schema_name,v_table_name) IN (%s) ;" % ' ,'.join(list_conditions)
+        self.logger.debug("SQL cleanup: %s" % sql_cleanup)
         for log_table in log_tables[0]:
             self.logger.debug("Cleaning up log events in log table %s " % (log_table,))
             sql_clean_log = sql.SQL(sql_cleanup).format(sql.Identifier(log_table))

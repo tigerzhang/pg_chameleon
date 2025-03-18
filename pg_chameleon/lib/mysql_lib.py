@@ -1309,7 +1309,6 @@ class mysql_source(object):
             resume_stream = True,
             only_schemas = self.schema_replica,
             slave_heartbeat = self.sleep_loop,
-
         )
         if gtid_set:
             self.logger.debug("GTID ENABLED - gtid: %s. id_batch: %s " % (gtid_set, id_batch))
@@ -1412,6 +1411,7 @@ class mysql_source(object):
             else:
 
                 for row in binlogevent.rows:
+                    # self.logger.debug("Row: %s" % row)
                     event_after={}
                     event_before={}
                     event_insert = {}
@@ -1471,6 +1471,8 @@ class mysql_source(object):
                                     column_type=column_map[column_name]
                                 except KeyError:
                                     self.logger.debug("Detected inconsistent structure for the table  %s. The replay may fail. " % (table_name))
+                                    self.logger.debug("Column name: %s" % column_name)
+                                    self.logger.debug("Column type: %s" % column_type)
                                     column_type = 'text'
                                 if column_type in self.hexify and event_after[column_name]:
                                     event_after[column_name]=binascii.hexlify(event_after[column_name]).decode()
@@ -1494,6 +1496,8 @@ class mysql_source(object):
                                     column_type=column_map[column_name]
                                 except KeyError:
                                     self.logger.debug("Detected inconsistent structure for the table  %s. The replay may fail. " % (table_name))
+                                    self.logger.debug("Column name: %s" % column_name)
+                                    self.logger.debug("Column type: %s" % column_type)
                                     column_type = 'text'
                                 if column_type in self.hexify and event_before[column_name]:
                                     event_before[column_name]=binascii.hexlify(event_before[column_name]).decode()
