@@ -663,7 +663,7 @@ class mysql_source(object):
             csv_results = self.cursor_unbuffered.fetchmany(copy_limit)
             if len(csv_results) == 0:
                 break
-            self.logger.debug("csv_results: %s" % csv_results)
+            # self.logger.debug("csv_results: %s" % csv_results)
             csv_data="\n".join(d[0] for d in csv_results )
 
             if self.copy_mode == 'direct':
@@ -1078,7 +1078,7 @@ class mysql_source(object):
         :param column_length: The expected length of the bit string
         :return: A properly formatted bit string
         """
-        self.logger.debug("Converting bit value: %s with length: %s", value, column_length)
+        # self.logger.debug("Converting bit value: %s with length: %s", value, column_length)
         try:
             if value is None:
                 return None
@@ -1121,7 +1121,7 @@ class mysql_source(object):
             else:
                 clean_value = clean_value.zfill(column_length)  # Pad with leading zeros
                 
-            self.logger.debug("Converted bit value to: %s", clean_value)
+            # self.logger.debug("Converted bit value to: %s", clean_value)
             return clean_value
             
         except Exception as err:
@@ -1465,8 +1465,8 @@ class mysql_source(object):
                     store_row = self.__store_binlog_event(table_name, schema_row)
                     skip_event = self.__skip_event(table_name, schema_row, binlogevent)
 
-                    if table_name == "device_alarm":
-                        self.logger.debug("row: %s" % row)
+                    # if table_name == "device_alarm":
+                    #     self.logger.debug("row: %s" % row)
 
                     if store_row and not skip_event[0]:
                         if table_key_dic in inc_tables:
@@ -1532,8 +1532,8 @@ class mysql_source(object):
                                     if match:
                                         bit_length = int(match.group(1))
                                     event_after[column_name] = self.__convert_bit_to_pg_bit(event_after[column_name], bit_length)
-                                    if column_name == "alarm":
-                                        self.logger.debug("event_after: %s" % event_after)
+                                    # if column_name == "alarm":
+                                        # self.logger.debug("event_after: %s" % event_after)
 
 
                             for column_name in event_before:
@@ -1559,8 +1559,8 @@ class mysql_source(object):
                                     if match:
                                         bit_length = int(match.group(1))
                                     event_before[column_name] = self.__convert_bit_to_pg_bit(event_before[column_name], bit_length)
-                                    if column_name == "alarm":
-                                        self.logger.debug("event_before: %s" % event_before)
+                                    # if column_name == "alarm":
+                                        # self.logger.debug("event_before: %s" % event_before)
                             event_insert={"global_data":global_data,"event_after":event_after,  "event_before":event_before}
                             size_insert += len(str(event_insert))
                             group_insert.append(event_insert)
