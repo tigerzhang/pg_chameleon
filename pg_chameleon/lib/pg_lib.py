@@ -3031,78 +3031,10 @@ class pg_engine(object):
         self.logger.debug("starting insert loop")
         for row_data in group_insert:
             global_data = row_data["global_data"]
-            event_after = row_data["event_after"]
-            event_before = row_data["event_before"]
+            event_after= row_data["event_after"]
+            event_before= row_data["event_before"]
             log_table = global_data["log_table"]
             event_time = global_data["event_time"]
-            
-            # Get table schema and name to check for bit columns
-            schema = global_data["schema"]
-            table = global_data["table"]
-            
-            # Check if there are any bit fields in the table
-            sql_check_bit = """
-                SELECT 
-                    column_name, character_maximum_length 
-                FROM 
-                    information_schema.columns 
-                WHERE 
-                    table_schema = %s 
-                    AND table_name = %s 
-                    AND data_type LIKE 'bit%%'
-            """
-            try:
-                self.pgsql_cur.execute(sql_check_bit, (schema, table))
-                bit_columns = {row[0]: row[1] or 64 for row in self.pgsql_cur.fetchall()}
-                
-                # Clean up bit field values to ensure they don't have excessive quotes
-                for col_name, bit_length in bit_columns.items():
-                    if col_name in event_after and event_after[col_name] is not None:
-                        value = event_after[col_name]
-                        # Handle excessive quotes in bit strings
-                        if isinstance(value, str):
-                            # Remove excessive quotes, common pattern is B''01010101''
-                            if value.startswith("B''") and value.endswith("''"):
-                                # Extract the binary digits between B'' and ''
-                                binary_digits = value[3:-2]
-                                # Replace multiple consecutive quotes with a single quote
-                                binary_digits = binary_digits.replace("''", "'")
-                                # Make sure it has only valid binary digits
-                                if not all(c in '01' for c in binary_digits):
-                                    binary_digits = ''.join(c for c in binary_digits if c in '01')
-                                # Reformat as a proper bit literal
-                                event_after[col_name] = f"B'{binary_digits}'"
-                            # Handle normal B'01010101' format
-                            elif value.startswith("B'") and value.endswith("'"):
-                                # Keep it as is, but ensure the content is valid
-                                binary_digits = value[2:-1]
-                                if not all(c in '01' for c in binary_digits):
-                                    binary_digits = ''.join(c for c in binary_digits if c in '01')
-                                event_after[col_name] = f"B'{binary_digits}'"
-                            # Handle plain binary string
-                            elif all(c in '01' for c in value):
-                                event_after[col_name] = f"B'{value}'"
-                    
-                    # Same processing for event_before
-                    if col_name in event_before and event_before[col_name] is not None:
-                        value = event_before[col_name]
-                        if isinstance(value, str):
-                            if value.startswith("B''") and value.endswith("''"):
-                                binary_digits = value[3:-2]
-                                binary_digits = binary_digits.replace("''", "'")
-                                if not all(c in '01' for c in binary_digits):
-                                    binary_digits = ''.join(c for c in binary_digits if c in '01')
-                                event_before[col_name] = f"B'{binary_digits}'"
-                            elif value.startswith("B'") and value.endswith("'"):
-                                binary_digits = value[2:-1]
-                                if not all(c in '01' for c in binary_digits):
-                                    binary_digits = ''.join(c for c in binary_digits if c in '01')
-                                event_before[col_name] = f"B'{binary_digits}'"
-                            elif all(c in '01' for c in value):
-                                event_before[col_name] = f"B'{value}'"
-            except Exception as e:
-                self.logger.error(f"Error processing bit columns: {e}")
-            
             sql_insert=sql.SQL("""
                 INSERT INTO sch_chameleon.{}
                     (
@@ -3131,7 +3063,6 @@ class pg_engine(object):
                 ;
             """).format(sql.Identifier(log_table))
             try:
-                # self.logger.debug("sql_insert: %s" % sql_insert)
                 self.pgsql_cur.execute(sql_insert,(
                         global_data["batch_id"],
                         global_data["table"],
@@ -3155,8 +3086,9 @@ class pg_engine(object):
                         if value:
                             event_before[key] = str(value).replace("\x00", "")
 
+                    #event_after = {key: str(value).replace("\x00", "") for key, value in event_after.items() if value}
+                    #event_before = {key: str(value).replace("\x00", "") for key, value in event_before.items() if value}
                     try:
-                        self.logger.debug("sql_insert: %s", sql_insert)
                         self.pgsql_cur.execute(sql_insert,(
                                 global_data["batch_id"],
                                 global_data["table"],
