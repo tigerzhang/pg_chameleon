@@ -24,10 +24,20 @@ class pg_encoder(json.JSONEncoder):
             isinstance(obj, bytes):
 
             return str(obj)
-        # For bit strings in JSON, return the pure binary string without B'...' format
-        # This is important for COPY operations which expect pure binary data
-        elif isinstance(obj, str) and len(obj) > 0 and all(c in '01' for c in obj):
-            return obj
+        # Handle bit strings properly - remove any 'B'...' format
+        elif isinstance(obj, str):
+            # Check if it's a bit field with B'...' format
+            if obj.startswith("B'") and obj.endswith("'"):
+                # Return the binary string without the B'...' wrapper
+                return obj[2:-1]
+            # Check for special case with extra quotes B''...''
+            elif obj.startswith("B''") and obj.endswith("''"):
+                return obj[3:-2]
+            # If it's a pure binary string (just 0s and 1s), return as is
+            elif all(c in '01' for c in obj):
+                return obj
+            else:
+                return obj
         return json.JSONEncoder.default(self, obj)
 
 class pgsql_source(object):
@@ -3021,8 +3031,8 @@ class pg_engine(object):
         self.logger.debug("starting insert loop")
         for row_data in group_insert:
             global_data = row_data["global_data"]
-            event_after= row_data["event_after"]
-            event_before= row_data["event_before"]
+            event_after = row_data["event_after"]
+            event_before = row_data["event_before"]
             log_table = global_data["log_table"]
             event_time = global_data["event_time"]
             
@@ -3045,55 +3055,54 @@ class pg_engine(object):
                 self.pgsql_cur.execute(sql_check_bit, (schema, table))
                 bit_columns = {row[0]: row[1] or 64 for row in self.pgsql_cur.fetchall()}
                 
-                # For SQL INSERT operations, we need to add B'...' format for bit fields
+                # Clean up bit field values to ensure they don't have excessive quotes
                 for col_name, bit_length in bit_columns.items():
                     if col_name in event_after and event_after[col_name] is not None:
-                        # If it's already a pure binary string, add the B'...' format
-                        if isinstance(event_after[col_name], str) and all(c in '01' for c in event_after[col_name]):
-                            event_after[col_name] = "B'" + event_after[col_name] + "'"
-                        # If it already has B'...' format, keep it
-                        elif isinstance(event_after[col_name], str) and event_after[col_name].startswith("B'") and event_after[col_name].endswith("'"):
-                            pass
-                        # Convert int or other formats to the proper format
-                        else:
-                            try:
-                                if isinstance(event_after[col_name], int):
-                                    binary_str = bin(event_after[col_name])[2:].zfill(bit_length)
-                                else:
-                                    # Try to clean the value to get only digits
-                                    clean_value = ''.join(c for c in str(event_after[col_name]) if c.isdigit())
-                                    binary_str = bin(int(clean_value))[2:].zfill(bit_length)
-                                event_after[col_name] = "B'" + binary_str + "'"
-                            except ValueError:
-                                # In case of conversion error, use default
-                                event_after[col_name] = "B'" + ('0' * bit_length) + "'"
-                
-                # Same for event_before
-                for col_name, bit_length in bit_columns.items():
+                        value = event_after[col_name]
+                        # Handle excessive quotes in bit strings
+                        if isinstance(value, str):
+                            # Remove excessive quotes, common pattern is B''01010101''
+                            if value.startswith("B''") and value.endswith("''"):
+                                # Extract the binary digits between B'' and ''
+                                binary_digits = value[3:-2]
+                                # Replace multiple consecutive quotes with a single quote
+                                binary_digits = binary_digits.replace("''", "'")
+                                # Make sure it has only valid binary digits
+                                if not all(c in '01' for c in binary_digits):
+                                    binary_digits = ''.join(c for c in binary_digits if c in '01')
+                                # Reformat as a proper bit literal
+                                event_after[col_name] = f"B'{binary_digits}'"
+                            # Handle normal B'01010101' format
+                            elif value.startswith("B'") and value.endswith("'"):
+                                # Keep it as is, but ensure the content is valid
+                                binary_digits = value[2:-1]
+                                if not all(c in '01' for c in binary_digits):
+                                    binary_digits = ''.join(c for c in binary_digits if c in '01')
+                                event_after[col_name] = f"B'{binary_digits}'"
+                            # Handle plain binary string
+                            elif all(c in '01' for c in value):
+                                event_after[col_name] = f"B'{value}'"
+                    
+                    # Same processing for event_before
                     if col_name in event_before and event_before[col_name] is not None:
-                        # If it's already a pure binary string, add the B'...' format
-                        if isinstance(event_before[col_name], str) and all(c in '01' for c in event_before[col_name]):
-                            event_before[col_name] = "B'" + event_before[col_name] + "'"
-                        # If it already has B'...' format, keep it
-                        elif isinstance(event_before[col_name], str) and event_before[col_name].startswith("B'") and event_before[col_name].endswith("'"):
-                            pass
-                        # Convert int or other formats to the proper format
-                        else:
-                            try:
-                                if isinstance(event_before[col_name], int):
-                                    binary_str = bin(event_before[col_name])[2:].zfill(bit_length)
-                                else:
-                                    # Try to clean the value to get only digits
-                                    clean_value = ''.join(c for c in str(event_before[col_name]) if c.isdigit())
-                                    binary_str = bin(int(clean_value))[2:].zfill(bit_length)
-                                event_before[col_name] = "B'" + binary_str + "'"
-                            except ValueError:
-                                # In case of conversion error, use default
-                                event_before[col_name] = "B'" + ('0' * bit_length) + "'"
-            except:
-                # If there's an error checking bit columns, continue without formatting
-                pass
-
+                        value = event_before[col_name]
+                        if isinstance(value, str):
+                            if value.startswith("B''") and value.endswith("''"):
+                                binary_digits = value[3:-2]
+                                binary_digits = binary_digits.replace("''", "'")
+                                if not all(c in '01' for c in binary_digits):
+                                    binary_digits = ''.join(c for c in binary_digits if c in '01')
+                                event_before[col_name] = f"B'{binary_digits}'"
+                            elif value.startswith("B'") and value.endswith("'"):
+                                binary_digits = value[2:-1]
+                                if not all(c in '01' for c in binary_digits):
+                                    binary_digits = ''.join(c for c in binary_digits if c in '01')
+                                event_before[col_name] = f"B'{binary_digits}'"
+                            elif all(c in '01' for c in value):
+                                event_before[col_name] = f"B'{value}'"
+            except Exception as e:
+                self.logger.error(f"Error processing bit columns: {e}")
+            
             sql_insert=sql.SQL("""
                 INSERT INTO sch_chameleon.{}
                     (
@@ -3122,7 +3131,7 @@ class pg_engine(object):
                 ;
             """).format(sql.Identifier(log_table))
             try:
-                self.logger.debug("sql_insert: %s" % sql_insert)
+                # self.logger.debug("sql_insert: %s" % sql_insert)
                 self.pgsql_cur.execute(sql_insert,(
                         global_data["batch_id"],
                         global_data["table"],
@@ -3146,8 +3155,6 @@ class pg_engine(object):
                         if value:
                             event_before[key] = str(value).replace("\x00", "")
 
-                    #event_after = {key: str(value).replace("\x00", "") for key, value in event_after.items() if value}
-                    #event_before = {key: str(value).replace("\x00", "") for key, value in event_before.items() if value}
                     try:
                         self.logger.debug("sql_insert: %s", sql_insert)
                         self.pgsql_cur.execute(sql_insert,(

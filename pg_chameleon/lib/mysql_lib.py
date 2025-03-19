@@ -488,7 +488,7 @@ class mysql_source(object):
                     WHEN
                         data_type IN ('bit')
                     THEN
-                        concat('concat("B''", lpad(bin(cast(`',column_name,'` AS unsigned)), 64, "0"), "''") AS `',column_name,'`')
+                        concat('lpad(bin(cast(`',column_name,'` AS unsigned)), 64, "0") ')
                     WHEN
                         data_type IN ('datetime','timestamp','date')
                     THEN
@@ -663,6 +663,7 @@ class mysql_source(object):
             csv_results = self.cursor_unbuffered.fetchmany(copy_limit)
             if len(csv_results) == 0:
                 break
+            self.logger.debug("csv_results: %s" % csv_results)
             csv_data="\n".join(d[0] for d in csv_results )
 
             if self.copy_mode == 'direct':
@@ -1069,39 +1070,63 @@ class mysql_source(object):
         decoded_data=binascii.hexlify(raw_data)
         return decoded_data.decode()[8:]
 
-    def __convert_bit_to_pg_bit(self, value, length=64):
+    def __convert_bit_to_pg_bit(self, value, column_length):
         """
-            将 MySQL 位值转换为纯二进制字符串
-            
-            :param value: MySQL 位字段值
-            :param length: 位长度
-            :return: 纯二进制字符串（只包含 0 和 1）
-        """
-        if value is None:
-            return None
+        Converts a bit field value from MySQL to a format suitable for PostgreSQL.
         
+        :param value: The bit value from MySQL, could be a string, int, or bytes
+        :param column_length: The expected length of the bit string
+        :return: A properly formatted bit string
+        """
+        self.logger.debug("Converting bit value: %s with length: %s", value, column_length)
         try:
-            # 处理不同类型的输入
+            if value is None:
+                return None
+                
+            # Clean value - remove extra quotes and B prefix
             if isinstance(value, str):
-                # 移除所有非二进制字符（包括 'B' 和引号）
-                clean_value = ''.join(c for c in value if c in '01')
-                if clean_value:
-                    binary_str = clean_value.zfill(length)
+                # Remove any B'...' format if present
+                if value.startswith("B'") and value.endswith("'"):
+                    # Handle B'...' format
+                    clean_value = value[2:-1]
+                # Handle escaped quotes like B''...''
+                elif value.startswith("B''") and value.endswith("''"):
+                    clean_value = value[3:-2]
+                    # Remove any remaining escaped quotes
+                    clean_value = clean_value.replace("''", "").replace("'", "")
+                # Handle other string formats
                 else:
-                    binary_str = "0" * length
+                    clean_value = value.strip().replace("'", "")
+                
+                # Remove any remaining quotes
+                clean_value = clean_value.replace("'", "")
+            elif isinstance(value, int):
+                # Convert integer to binary string
+                clean_value = bin(value)[2:]  # Remove '0b' prefix
+            elif isinstance(value, bytes):
+                # Convert bytes to binary string
+                clean_value = ''.join(format(byte, '08b') for byte in value)
             else:
-                # 处理整数值
-                binary_str = bin(int(value))[2:].zfill(length)
+                self.logger.warning("Unknown bit value type: %s", type(value))
+                return "0" * column_length
+                
+            # Ensure only contains 0s and 1s
+            clean_value = ''.join(c for c in clean_value if c in '01')
+            if not clean_value:
+                clean_value = "0" * column_length
             
-            # 确保长度正确
-            if len(binary_str) > length:
-                binary_str = binary_str[-length:]  # 截取最低有效位
+            # Pad or truncate to correct length
+            if len(clean_value) > column_length:
+                clean_value = clean_value[-column_length:]  # Take rightmost digits
+            else:
+                clean_value = clean_value.zfill(column_length)  # Pad with leading zeros
+                
+            self.logger.debug("Converted bit value to: %s", clean_value)
+            return clean_value
             
-            return binary_str
-        except Exception as e:
-            self.logger.error("Error converting bit value '%s': %s", value, str(e))
-            # 返回默认值
-            return "0" * length
+        except Exception as err:
+            self.logger.error("Error converting bit value: %s", err)
+            return "0" * column_length
 
     def get_table_type_map(self):
         """
@@ -1439,6 +1464,10 @@ class mysql_source(object):
                     table_key_dic = "%s.%s" % (destination_schema, table_name)
                     store_row = self.__store_binlog_event(table_name, schema_row)
                     skip_event = self.__skip_event(table_name, schema_row, binlogevent)
+
+                    if table_name == "device_alarm":
+                        self.logger.debug("row: %s" % row)
+
                     if store_row and not skip_event[0]:
                         if table_key_dic in inc_tables:
                             table_consistent = False
@@ -1503,6 +1532,8 @@ class mysql_source(object):
                                     if match:
                                         bit_length = int(match.group(1))
                                     event_after[column_name] = self.__convert_bit_to_pg_bit(event_after[column_name], bit_length)
+                                    if column_name == "alarm":
+                                        self.logger.debug("event_after: %s" % event_after)
 
 
                             for column_name in event_before:
@@ -1528,6 +1559,8 @@ class mysql_source(object):
                                     if match:
                                         bit_length = int(match.group(1))
                                     event_before[column_name] = self.__convert_bit_to_pg_bit(event_before[column_name], bit_length)
+                                    if column_name == "alarm":
+                                        self.logger.debug("event_before: %s" % event_before)
                             event_insert={"global_data":global_data,"event_after":event_after,  "event_before":event_before}
                             size_insert += len(str(event_insert))
                             group_insert.append(event_insert)
